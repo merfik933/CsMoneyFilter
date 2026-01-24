@@ -13,8 +13,5 @@
       "matches": ["https://cs.money/*"],
       "js": ["content.js"]
     }
-  ],
-  "background": {
-    "service_worker": "background.js"
-  }
+  ]
 }

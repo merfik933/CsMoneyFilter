@@ -148,17 +148,29 @@ function filterProducts() {
             button.style.top = "0";
             button.style.left = "0";
             button.style.borderRadius = "5px";
-            button.style.color = "white";
-            button.style.zIndex = "1000";
+            button.style.color = "#fff";
+            button.style.backgroundColor = "#D2042D";
+            button.style.boxShadow = "none";
             button.style.cursor = "pointer";
             button.addEventListener("click", () => {
                 const id = product.getAttribute("data-card-item-id");
-                image_id_urls.push(id);
-                const bgElement = product.querySelector(".csm_06d323e9.csm_157c9c46");
-                if (bgElement) {
-                    bgElement.style.backgroundColor = "";
-                }
-                chrome.runtime.sendMessage({ action: "addImageId", id: image_id_urls });
+                chrome.storage.local.get(["image_id_urls"], (data) => {
+                    const storedIds = Array.isArray(data.image_id_urls) ? data.image_id_urls : [];
+                    if (!storedIds.includes(id)) {
+                        storedIds.push(id);
+                    }
+                    image_id_urls = storedIds;
+
+                    chrome.storage.local.set({ image_id_urls: storedIds });
+                    chrome.runtime.sendMessage({ action: "updateIDList", id: storedIds });
+
+                    const bgElement = product.querySelector(".csm_06d323e9.csm_157c9c46");
+                    if (bgElement) {
+                        bgElement.style.backgroundColor = "";
+                    }
+
+                    filterProducts();
+                });
             });
             product.style.position = "relative";
             product.appendChild(button);
