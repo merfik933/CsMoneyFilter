@@ -37,7 +37,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function filterProducts() {
-    let products = document.querySelectorAll(".InventorySearchResults_item__s9sB7");
+    let products = document.querySelectorAll("[data-card-item-id]");
     let counter = 0;
     products.forEach((product) => {
         if (!(minDiscount === 0 && maxDiscount === 100)) {
@@ -62,8 +62,8 @@ function filterProducts() {
             }
         }
         if (is_image_url_checked) {
-            const imageElementSrc = product.querySelector(".ImageZone_container__PLZCF").src;
-            const mvElements = product.querySelectorAll("span.CsgoDescriptionSmallZone_token___Y7iq");
+            const imageElementSrc = product.querySelector(".csm_3f4a05c6")?.src || product.querySelector(".csm_64196821")?.src;
+            const mvElements = product.querySelectorAll("span.csm_ca3cc1f1.csm_ad434a29");
 
             if (image_url_filter_type === "blacklist") {
                 for (const [url, mvs] of Object.entries(image_urls)) {
@@ -145,9 +145,11 @@ function filterProducts() {
             button.style.left = "0";
             button.style.borderRadius = "5px";
             button.style.color = "white";
+            button.style.zIndex = "1000";
+            button.style.cursor = "pointer";
             button.addEventListener("click", () => {
                 product.style.display = "none";
-                id = product.getAttribute("data-card-item-id");
+                const id = product.getAttribute("data-card-item-id");
                 image_id_urls.push(id);
                 chrome.runtime.sendMessage({ action: "addImageId", id: image_id_urls });
             });
