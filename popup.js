@@ -1,6 +1,7 @@
 const minRangeInput = document.getElementById("min-range");
 const maxRangeInput = document.getElementById("max-range");
 const delayInput = document.getElementById("delay");
+const highlightColorInput = document.getElementById("highlight-color");
 
 const addNew = document.querySelector(".add-new");
 const addNew_id = document.querySelector(".add-new-id");
@@ -144,10 +145,11 @@ addNew_id.addEventListener("click", () => {
 });
 
 // get data from storage
-chrome.storage.local.get(["min", "max", "delay", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls"], (data) => {
+chrome.storage.local.get(["min", "max", "delay", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls"], (data) => {
     if (data.min !== undefined) minRangeInput.value = data.min;
     if (data.max !== undefined) maxRangeInput.value = data.max;
     if (data.delay !== undefined) delayInput.value = data.delay;
+    if (data.highlight_color !== undefined) highlightColorInput.value = data.highlight_color;
 
     if (data.is_image_url_checked !== undefined) document.getElementById("image-filter-checkbox").checked = data.is_image_url_checked;
     if (data.image_url_filter_type !== undefined) document.getElementById("image-filter-type").value = data.image_url_filter_type;
@@ -244,6 +246,7 @@ applyButton.addEventListener("click", () => {
     const max = parseInt(maxRangeInput.value, 10);
 
     const delay = parseInt(delayInput.value, 10);
+    const highlight_color = highlightColorInput.value;
 
     const is_image_url_checked = document.getElementById("image-filter-checkbox").checked;
     const image_url_filter_type = document.getElementById("image-filter-type").value;
@@ -261,7 +264,7 @@ applyButton.addEventListener("click", () => {
     });
 
     if (min <= max) {
-        chrome.storage.local.set({ min, max, delay, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls });
+        chrome.storage.local.set({ min, max, delay, highlight_color, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls });
 
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             chrome.tabs.sendMessage(tabs[0].id, {
@@ -269,6 +272,7 @@ applyButton.addEventListener("click", () => {
                 min,
                 max,
                 delay,
+                highlight_color,
                 is_image_url_checked,
                 image_url_filter_type,
                 image_urls,
