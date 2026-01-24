@@ -1,7 +1,6 @@
-const minRangeInput = document.getElementById("min-range");
-const maxRangeInput = document.getElementById("max-range");
+const discountRangesContainer = document.getElementById("discount-ranges");
+const addDiscountRangeButton = document.getElementById("add-discount-range");
 const delayInput = document.getElementById("delay");
-const highlightColorInput = document.getElementById("highlight-color");
 
 const addNew = document.querySelector(".add-new");
 const addNew_id = document.querySelector(".add-new-id");
@@ -144,12 +143,121 @@ addNew_id.addEventListener("click", () => {
     }
 });
 
+const DEFAULT_RANGE = { min: 0, max: 100, color: "#1e365c" };
+
+function renderDiscountRanges(ranges) {
+    discountRangesContainer.innerHTML = "";
+    ranges.forEach((range, index) => {
+        const row = document.createElement("div");
+        row.className = "discount-range";
+        row.dataset.index = index;
+
+        const minLabel = document.createElement("label");
+        minLabel.textContent = "Мін:";
+        const minInput = document.createElement("input");
+        minInput.type = "number";
+        minInput.min = "0";
+        minInput.max = "100";
+        minInput.value = range.min;
+        minInput.className = "range-min";
+
+        const maxLabel = document.createElement("label");
+        maxLabel.textContent = "Макс:";
+        const maxInput = document.createElement("input");
+        maxInput.type = "number";
+        maxInput.min = "0";
+        maxInput.max = "100";
+        maxInput.value = range.max;
+        maxInput.className = "range-max";
+
+            const colorInput = document.createElement("input");
+            colorInput.type = "color";
+            colorInput.value = range.color || DEFAULT_RANGE.color;
+            colorInput.className = "range-color"; // Retain the color input
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "range-remove";
+            removeButton.textContent = "✕"; // Change to cross
+        removeButton.disabled = ranges.length === 1;
+        removeButton.addEventListener("click", () => {
+            if (ranges.length === 1) {
+                return;
+            }
+            ranges.splice(index, 1);
+            renderDiscountRanges(ranges);
+        });
+
+        row.appendChild(minLabel);
+        row.appendChild(minInput);
+        row.appendChild(maxLabel);
+        row.appendChild(maxInput);
+        row.appendChild(colorInput);
+        row.appendChild(removeButton);
+
+        discountRangesContainer.appendChild(row);
+    });
+}
+
+function readDiscountRangesFromUI() {
+    const rows = discountRangesContainer.querySelectorAll(".discount-range");
+    const ranges = [];
+    rows.forEach((row) => {
+        const minValue = parseInt(row.querySelector(".range-min").value, 10);
+        const maxValue = parseInt(row.querySelector(".range-max").value, 10);
+        const colorValue = row.querySelector(".range-color").value || DEFAULT_RANGE.color;
+        ranges.push({ min: minValue, max: maxValue, color: colorValue });
+    });
+    return ranges;
+}
+
+function validateDiscountRanges(ranges) {
+    if (!ranges || ranges.length === 0) {
+        return "Має бути хоча б один діапазон";
+    }
+
+    for (const range of ranges) {
+        if (Number.isNaN(range.min) || Number.isNaN(range.max)) {
+            return "Мін/Макс мають бути числами";
+        }
+        if (range.min < 0 || range.max > 100) {
+            return "Діапазон має бути між 0 і 100";
+        }
+        if (range.min > range.max) {
+            return "Мін не може бути більшим за Макс";
+        }
+    }
+
+    const sorted = [...ranges].sort((a, b) => a.min - b.min);
+    for (let i = 0; i < sorted.length - 1; i++) {
+        const current = sorted[i];
+        const next = sorted[i + 1];
+        if (current.max > next.min) {
+            return "Діапазони не можуть перетинатися";
+        }
+    }
+
+    return null;
+}
+
+addDiscountRangeButton.addEventListener("click", () => {
+    const currentRanges = readDiscountRangesFromUI();
+    currentRanges.push({ ...DEFAULT_RANGE });
+    renderDiscountRanges(currentRanges);
+});
+
 // get data from storage
-chrome.storage.local.get(["min", "max", "delay", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls"], (data) => {
-    if (data.min !== undefined) minRangeInput.value = data.min;
-    if (data.max !== undefined) maxRangeInput.value = data.max;
+chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "delay", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls"], (data) => {
     if (data.delay !== undefined) delayInput.value = data.delay;
-    if (data.highlight_color !== undefined) highlightColorInput.value = data.highlight_color;
+
+    let ranges = data.discount_ranges;
+    if (!ranges || ranges.length === 0) {
+        const fallbackMin = data.min !== undefined ? data.min : DEFAULT_RANGE.min;
+        const fallbackMax = data.max !== undefined ? data.max : DEFAULT_RANGE.max;
+        const fallbackColor = data.highlight_color || DEFAULT_RANGE.color;
+        ranges = [{ min: fallbackMin, max: fallbackMax, color: fallbackColor }];
+    }
+    renderDiscountRanges(ranges);
 
     if (data.is_image_url_checked !== undefined) document.getElementById("image-filter-checkbox").checked = data.is_image_url_checked;
     if (data.image_url_filter_type !== undefined) document.getElementById("image-filter-type").value = data.image_url_filter_type;
@@ -242,11 +350,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // apply button
 const applyButton = document.getElementById("apply-filter");
 applyButton.addEventListener("click", () => {
-    const min = parseInt(minRangeInput.value, 10);
-    const max = parseInt(maxRangeInput.value, 10);
+    const discount_ranges = readDiscountRangesFromUI();
+    const rangesError = validateDiscountRanges(discount_ranges);
+    if (rangesError) {
+        alert(rangesError);
+        return;
+    }
 
     const delay = parseInt(delayInput.value, 10);
-    const highlight_color = highlightColorInput.value;
 
     const is_image_url_checked = document.getElementById("image-filter-checkbox").checked;
     const image_url_filter_type = document.getElementById("image-filter-type").value;
@@ -263,26 +374,20 @@ applyButton.addEventListener("click", () => {
         image_id_urls.push(element.textContent);
     });
 
-    if (min <= max) {
-        chrome.storage.local.set({ min, max, delay, highlight_color, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls });
+    chrome.storage.local.set({ discount_ranges, delay, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls });
 
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            chrome.tabs.sendMessage(tabs[0].id, {
-                action: "applyFilter",
-                min,
-                max,
-                delay,
-                highlight_color,
-                is_image_url_checked,
-                image_url_filter_type,
-                image_urls,
-                is_image_url_id_checked,
-                image_id_urls
-            });
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, {
+            action: "applyFilter",
+            discount_ranges,
+            delay,
+            is_image_url_checked,
+            image_url_filter_type,
+            image_urls,
+            is_image_url_id_checked,
+            image_id_urls
         });
-    } else {
-        alert("Min range should be less or equal to max range");
-    }
+    });
 });
 
   

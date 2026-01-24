@@ -11,17 +11,9 @@
 <body>
     <section class="discount-filter">
         <h2>Фільтр знижок</h2>
+        <div id="discount-ranges" class="discount-ranges"></div>
         <div class="row">
-            <label for="min-range" class="range-label">
-                Мін:
-                <input type="number" id="min-range" class="input-range-field" min="0" max="100" value="0">
-                %
-            </label>
-            <label for="max-range" class="range-label">
-                Макс:
-                <input type="number" id="max-range" class="input-range-field" min="0" max="100" value="100">
-                %
-            </label>
+            <button id="add-discount-range" class="add-range">Додати діапазон</button>
         </div>
     </section>
 
@@ -68,12 +60,6 @@
                 Затримка фільтрації:
                 <input type="number" id="delay" class="input-settings-field" min="0" value="700">
                 мс
-            </label>
-        </div>
-        <div class="row">
-            <label for="highlight-color" class="settings-label">
-                Колір виділенння (HEX):
-                <input type="color" id="highlight-color" value="#FFFF00">
             </label>
         </div>
     </section>

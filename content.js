@@ -1,7 +1,6 @@
 console.log("Hello from content.js");
 
-let minDiscount = 0;
-let maxDiscount = 100;
+let discountRanges = [{ min: 0, max: 100, color: "#1e365c" }];
 
 let is_image_url_checked = false;
 let image_url_filter_type = "blacklist";
@@ -11,16 +10,15 @@ let is_image_url_id_checked = false;
 let image_id_urls = {};
 
 let timeDelay = 700;
-let highlightColor = "#FFFF00";
 let filterActive = false;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "applyFilter") {
         filterActive = true;
-        minDiscount = message.min;
-        maxDiscount = message.max;
+        discountRanges = Array.isArray(message.discount_ranges) && message.discount_ranges.length > 0
+            ? message.discount_ranges
+            : discountRanges;
         timeDelay = message.delay;
-        highlightColor = message.highlight_color;
 
         is_image_url_checked = message.is_image_url_checked;
         image_url_filter_type = message.image_url_filter_type;
@@ -53,26 +51,19 @@ function filterProducts() {
         let shouldHighlight = false;
         
         // Перевіряємо фільтри
-        // 1. Фільтр по знижкам
-        if (!(minDiscount === 0 && maxDiscount === 100)) {
-            const discountElement = product.querySelector(".Tag-module_green__5A03j .Tag-module_content__uLsTI");
-            if (!discountElement) {
-                if (minDiscount > 0) {
-                    shouldHighlight = false;
-                } else {
-                    shouldHighlight = true;
-                }
-            } else {
-                const discount = parseInt(discountElement.innerText.replace("%", "").replace("-", ""));
-                if (discount >= minDiscount && discount <= maxDiscount) {
-                    shouldHighlight = true;
-                } else {
-                    shouldHighlight = false;
+        // 1. Фільтр по знижкам (діапазони)
+        let matchedRangeColor = null;
+        const discountElement = product.querySelector(".Tag-module_green__5A03j .Tag-module_content__uLsTI");
+        if (discountElement) {
+            const discount = parseInt(discountElement.innerText.replace("%", "").replace("-", ""));
+            for (const range of discountRanges) {
+                if (discount >= range.min && discount <= range.max) {
+                    matchedRangeColor = range.color;
+                    break;
                 }
             }
-        } else {
-            shouldHighlight = true;
         }
+        shouldHighlight = matchedRangeColor !== null;
         
         // 2. Фільтр по URL зображень + MW
         if (shouldHighlight && is_image_url_checked) {
@@ -137,7 +128,7 @@ function filterProducts() {
             const bgElement = product.querySelector(".csm_06d323e9.csm_157c9c46");
             if (bgElement) {
                 if (shouldHighlight) {
-                    bgElement.style.backgroundColor = highlightColor;
+                    bgElement.style.backgroundColor = matchedRangeColor;
                 } else {
                     bgElement.style.backgroundColor = "";
                 }
