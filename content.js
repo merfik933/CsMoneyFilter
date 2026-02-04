@@ -12,6 +12,79 @@ let image_id_urls = {};
 let timeDelay = 700;
 let filterActive = false;
 
+function getProductCards() {
+    const selectors = [
+        "[data-card-item-id]",
+        "[data-card-id]",
+        "[data-card-price]"
+    ];
+
+    for (const selector of selectors) {
+        const nodes = document.querySelectorAll(selector);
+        if (nodes.length > 0) {
+            return nodes;
+        }
+    }
+
+    return [];
+}
+
+function getDiscountValue(product) {
+    const discountCandidates = product.querySelectorAll('[class*="Tag-module_content"]');
+    for (const candidate of discountCandidates) {
+        const text = candidate.innerText || "";
+        if (text.includes("%")) {
+            const value = parseInt(text.replace("%", "").replace("-", "").trim(), 10);
+            if (!Number.isNaN(value)) {
+                return value;
+            }
+        }
+    }
+
+    return 0;
+}
+
+function getImageSrc(product) {
+    const image = product.querySelector(
+        "img.csm_3f4a05c6, img.csm_64196821, img[src*='steamcommunity'], img[src*='assets.cs.money']"
+    );
+    return image ? image.src : null;
+}
+
+function getMvElements(product) {
+    return product.querySelectorAll("span");
+}
+
+function findBackgroundElement(product) {
+    const selectors = [
+        ".csm_06d323e9.csm_157c9c46",
+        "[data-card-id]",
+        ".csm_3a2fd55b.csm_26f79334",
+        ".csm_8caf403e"
+    ];
+
+    for (const selector of selectors) {
+        const element = product.querySelector(selector);
+        if (element) {
+            return element;
+        }
+    }
+
+    const candidates = product.querySelectorAll("div");
+    for (const candidate of candidates) {
+        const bg = getComputedStyle(candidate).backgroundColor;
+        if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") {
+            return candidate;
+        }
+    }
+
+    return product;
+}
+
+function getProductId(product) {
+    return product.getAttribute("data-card-item-id") || product.getAttribute("data-card-id");
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "applyFilter") {
         filterActive = true;
@@ -45,7 +118,7 @@ function filterProducts() {
         return;
     }
     
-    let products = document.querySelectorAll("[data-card-item-id]");
+    let products = getProductCards();
     
     products.forEach((product) => {
         let shouldHighlight = false;
@@ -53,22 +126,19 @@ function filterProducts() {
         // Перевіряємо фільтри
         // 1. Фільтр по знижкам (діапазони)
         let matchedRangeColor = null;
-        const discountElement = product.querySelector(".Tag-module_green__5A03j .Tag-module_content__uLsTI");
-        if (discountElement) {
-            const discount = parseInt(discountElement.innerText.replace("%", "").replace("-", ""));
-            for (const range of discountRanges) {
-                if (discount >= range.min && discount <= range.max) {
-                    matchedRangeColor = range.color;
-                    break;
-                }
+        const discount = getDiscountValue(product);
+        for (const range of discountRanges) {
+            if (discount >= range.min && discount <= range.max) {
+                matchedRangeColor = range.color;
+                break;
             }
         }
         shouldHighlight = matchedRangeColor !== null;
         
         // 2. Фільтр по URL зображень + MW
         if (shouldHighlight && is_image_url_checked) {
-            const imageElementSrc = product.querySelector(".csm_3f4a05c6")?.src || product.querySelector(".csm_64196821")?.src;
-            const mvElements = product.querySelectorAll("span.csm_ca3cc1f1.csm_ad434a29");
+            const imageElementSrc = getImageSrc(product);
+            const mvElements = getMvElements(product);
 
             if (image_url_filter_type === "blacklist") {
                 // Чорний список - виділяємо товари які НЕ в списку
@@ -117,15 +187,15 @@ function filterProducts() {
         
         // 3. Фільтр по ID - приховуємо товари в чорному списку
         if (shouldHighlight && is_image_url_id_checked) {
-            const id = product.getAttribute("data-card-item-id");
-            if (image_id_urls.includes(id)) {
+            const id = getProductId(product);
+            if (id && image_id_urls.includes(id)) {
                 shouldHighlight = false;
             }
         }
 
         // Застосовуємо виділення
         setTimeout(() => {
-            const bgElement = product.querySelector(".csm_06d323e9.csm_157c9c46");
+            const bgElement = findBackgroundElement(product);
             if (bgElement) {
                 if (shouldHighlight) {
                     bgElement.style.backgroundColor = matchedRangeColor;
@@ -153,7 +223,10 @@ function filterProducts() {
             button.style.boxShadow = "none";
             button.style.cursor = "pointer";
             button.addEventListener("click", () => {
-                const id = product.getAttribute("data-card-item-id");
+                const id = getProductId(product);
+                if (!id) {
+                    return;
+                }
                 chrome.storage.local.get(["image_id_urls"], (data) => {
                     const storedIds = Array.isArray(data.image_id_urls) ? data.image_id_urls : [];
                     if (!storedIds.includes(id)) {
@@ -164,7 +237,7 @@ function filterProducts() {
                     chrome.storage.local.set({ image_id_urls: storedIds });
                     chrome.runtime.sendMessage({ action: "updateIDList", id: storedIds });
 
-                    const bgElement = product.querySelector(".csm_06d323e9.csm_157c9c46");
+                    const bgElement = findBackgroundElement(product);
                     if (bgElement) {
                         bgElement.style.backgroundColor = "";
                     }
