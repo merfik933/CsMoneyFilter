@@ -143,11 +143,12 @@ addNew_id.addEventListener("click", () => {
     }
 });
 
-const DEFAULT_RANGE = { min: 0, max: 100, color: "#1e365c" };
+const DEFAULT_RANGE = { min: 0, max: 100, color: "#1e365c", buy: false };
 
 function renderDiscountRanges(ranges) {
     discountRangesContainer.innerHTML = "";
     ranges.forEach((range, index) => {
+        const buyValue = range.buy !== undefined ? range.buy : DEFAULT_RANGE.buy;
         const row = document.createElement("div");
         row.className = "discount-range";
         row.dataset.index = index;
@@ -169,6 +170,15 @@ function renderDiscountRanges(ranges) {
         maxInput.max = "100";
         maxInput.value = range.max;
         maxInput.className = "range-max";
+
+        const buyLabel = document.createElement("label");
+        buyLabel.textContent = "Buy";
+        buyLabel.className = "range-buy";
+        const buyInput = document.createElement("input");
+        buyInput.type = "checkbox";
+        buyInput.checked = buyValue;
+        buyInput.className = "range-buy-checkbox";
+        buyLabel.appendChild(buyInput);
 
             const colorInput = document.createElement("input");
             colorInput.type = "color";
@@ -192,6 +202,7 @@ function renderDiscountRanges(ranges) {
         row.appendChild(minInput);
         row.appendChild(maxLabel);
         row.appendChild(maxInput);
+        row.appendChild(buyLabel);
         row.appendChild(colorInput);
         row.appendChild(removeButton);
 
@@ -206,7 +217,8 @@ function readDiscountRangesFromUI() {
         const minValue = parseInt(row.querySelector(".range-min").value, 10);
         const maxValue = parseInt(row.querySelector(".range-max").value, 10);
         const colorValue = row.querySelector(".range-color").value || DEFAULT_RANGE.color;
-        ranges.push({ min: minValue, max: maxValue, color: colorValue });
+        const buyValue = row.querySelector(".range-buy-checkbox").checked;
+        ranges.push({ min: minValue, max: maxValue, color: colorValue, buy: buyValue });
     });
     return ranges;
 }
@@ -255,7 +267,7 @@ chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "d
         const fallbackMin = data.min !== undefined ? data.min : DEFAULT_RANGE.min;
         const fallbackMax = data.max !== undefined ? data.max : DEFAULT_RANGE.max;
         const fallbackColor = data.highlight_color || DEFAULT_RANGE.color;
-        ranges = [{ min: fallbackMin, max: fallbackMax, color: fallbackColor }];
+            ranges = [{ min: fallbackMin, max: fallbackMax, color: fallbackColor, buy: DEFAULT_RANGE.buy }];
     }
     renderDiscountRanges(ranges);
 

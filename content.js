@@ -1,6 +1,6 @@
 console.log("Hello from content.js");
 
-let discountRanges = [{ min: 0, max: 100, color: "#1e365c" }];
+let discountRanges = [{ min: 0, max: 100, color: "#1e365c", buy: false }];
 
 let is_image_url_checked = false;
 let image_url_filter_type = "blacklist";
