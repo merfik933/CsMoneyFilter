@@ -8,8 +8,6 @@ let image_urls = {};
 
 let is_image_url_id_checked = false;
 let image_id_urls = {};
-
-let timeDelay = 700;
 let filterActive = false;
 
 function getProductCards() {
@@ -91,7 +89,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         discountRanges = Array.isArray(message.discount_ranges) && message.discount_ranges.length > 0
             ? message.discount_ranges
             : discountRanges;
-        timeDelay = message.delay;
 
         is_image_url_checked = message.is_image_url_checked;
         image_url_filter_type = message.image_url_filter_type;
@@ -194,16 +191,14 @@ function filterProducts() {
         }
 
         // Застосовуємо виділення
-        setTimeout(() => {
-            const bgElement = findBackgroundElement(product);
-            if (bgElement) {
-                if (shouldHighlight) {
-                    bgElement.style.backgroundColor = matchedRangeColor;
-                } else {
-                    bgElement.style.backgroundColor = "";
-                }
+        const bgElement = findBackgroundElement(product);
+        if (bgElement) {
+            if (shouldHighlight) {
+                bgElement.style.backgroundColor = matchedRangeColor;
+            } else {
+                bgElement.style.backgroundColor = "";
             }
-        }, timeDelay);
+        }
 
         // Додаємо кнопку видалення (для чорного списку ID)
         const buttonDelete = product.querySelector(".deleteButton") 
