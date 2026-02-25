@@ -1,6 +1,7 @@
 const discountRangesContainer = document.getElementById("discount-ranges");
 const addDiscountRangeButton = document.getElementById("add-discount-range");
 const delayInput = document.getElementById("delay");
+const autoBuyCheckbox = document.getElementById("auto-buy");
 
 const addNew = document.querySelector(".add-new");
 const addNew_id = document.querySelector(".add-new-id");
@@ -145,6 +146,16 @@ addNew_id.addEventListener("click", () => {
 
 const DEFAULT_RANGE = { min: 0, max: 100, color: "#1e365c", buy: false };
 
+function updateBuyCheckboxState() {
+    if (!autoBuyCheckbox) {
+        return;
+    }
+    const isEnabled = autoBuyCheckbox.checked;
+    discountRangesContainer.querySelectorAll(".range-buy-checkbox").forEach((checkbox) => {
+        checkbox.disabled = !isEnabled;
+    });
+}
+
 function renderDiscountRanges(ranges) {
     discountRangesContainer.innerHTML = "";
     ranges.forEach((range, index) => {
@@ -208,6 +219,8 @@ function renderDiscountRanges(ranges) {
 
         discountRangesContainer.appendChild(row);
     });
+
+    updateBuyCheckboxState();
 }
 
 function readDiscountRangesFromUI() {
@@ -258,9 +271,14 @@ addDiscountRangeButton.addEventListener("click", () => {
     renderDiscountRanges(currentRanges);
 });
 
+autoBuyCheckbox.addEventListener("change", () => {
+    updateBuyCheckboxState();
+});
+
 // get data from storage
-chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "delay", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls"], (data) => {
+chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "delay", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls", "auto_buy_enabled"], (data) => {
     if (data.delay !== undefined) delayInput.value = data.delay;
+    if (data.auto_buy_enabled !== undefined) autoBuyCheckbox.checked = data.auto_buy_enabled;
 
     let ranges = data.discount_ranges;
     if (!ranges || ranges.length === 0) {
@@ -270,6 +288,7 @@ chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "d
             ranges = [{ min: fallbackMin, max: fallbackMax, color: fallbackColor, buy: DEFAULT_RANGE.buy }];
     }
     renderDiscountRanges(ranges);
+    updateBuyCheckboxState();
 
     if (data.is_image_url_checked !== undefined) document.getElementById("image-filter-checkbox").checked = data.is_image_url_checked;
     if (data.image_url_filter_type !== undefined) document.getElementById("image-filter-type").value = data.image_url_filter_type;
@@ -386,7 +405,9 @@ applyButton.addEventListener("click", () => {
         image_id_urls.push(element.textContent);
     });
 
-    chrome.storage.local.set({ discount_ranges, delay, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls });
+    const auto_buy_enabled = autoBuyCheckbox.checked;
+
+    chrome.storage.local.set({ discount_ranges, delay, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls, auto_buy_enabled });
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         chrome.tabs.sendMessage(tabs[0].id, {
@@ -397,7 +418,8 @@ applyButton.addEventListener("click", () => {
             image_url_filter_type,
             image_urls,
             is_image_url_id_checked,
-            image_id_urls
+            image_id_urls,
+            auto_buy_enabled
         });
     });
 });
