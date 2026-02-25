@@ -1,6 +1,9 @@
 const discountRangesContainer = document.getElementById("discount-ranges");
 const addDiscountRangeButton = document.getElementById("add-discount-range");
 const autoBuyCheckbox = document.getElementById("auto-buy");
+const randomReloadMinInput = document.getElementById("random-reload-min");
+const randomReloadMaxInput = document.getElementById("random-reload-max");
+const clearHistoryButton = document.getElementById("clear-history");
 
 const addNew = document.querySelector(".add-new");
 const addNew_id = document.querySelector(".add-new-id");
@@ -275,8 +278,19 @@ autoBuyCheckbox.addEventListener("change", () => {
 });
 
 // get data from storage
-chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls", "auto_buy_enabled"], (data) => {
+chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls", "auto_buy_enabled", "random_reload_min", "random_reload_max", "purchase_history"], (data) => {
     if (data.auto_buy_enabled !== undefined) autoBuyCheckbox.checked = data.auto_buy_enabled;
+    if (data.random_reload_min !== undefined) randomReloadMinInput.value = data.random_reload_min;
+    if (data.random_reload_max !== undefined) randomReloadMaxInput.value = data.random_reload_max;
+
+    const now = Date.now();
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    if (Array.isArray(data.purchase_history)) {
+        const prunedHistory = data.purchase_history.filter((item) => item && item.ts && item.ts >= cutoff);
+        if (prunedHistory.length !== data.purchase_history.length) {
+            chrome.storage.local.set({ purchase_history: prunedHistory });
+        }
+    }
 
     let ranges = data.discount_ranges;
     if (!ranges || ranges.length === 0) {
@@ -378,6 +392,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // apply button
 const applyButton = document.getElementById("apply-filter");
+let monitoringActive = false;
+
+function updateMonitoringButtonUI() {
+    applyButton.textContent = monitoringActive ? "Закінчити моніторинг" : "Розпочати моніторинг";
+    applyButton.classList.toggle("monitoring-active", monitoringActive);
+}
+
+function syncMonitoringStateFromPage() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) {
+            monitoringActive = false;
+            updateMonitoringButtonUI();
+            return;
+        }
+
+        chrome.tabs.sendMessage(tabs[0].id, { action: "getMonitoringState" }, (response) => {
+            if (chrome.runtime.lastError) {
+                monitoringActive = false;
+            } else {
+                monitoringActive = Boolean(response && response.monitoringActive);
+            }
+            updateMonitoringButtonUI();
+        });
+    });
+}
+
+updateMonitoringButtonUI();
+syncMonitoringStateFromPage();
+
 applyButton.addEventListener("click", () => {
     const discount_ranges = readDiscountRangesFromUI();
     const rangesError = validateDiscountRanges(discount_ranges);
@@ -403,7 +446,14 @@ applyButton.addEventListener("click", () => {
 
     const auto_buy_enabled = autoBuyCheckbox.checked;
 
-    chrome.storage.local.set({ discount_ranges, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls, auto_buy_enabled });
+    const random_reload_min = Math.max(0, parseInt(randomReloadMinInput.value, 10) || 0);
+    const random_reload_max = Math.max(random_reload_min, parseInt(randomReloadMaxInput.value, 10) || random_reload_min);
+
+    const nextMonitoringState = !monitoringActive;
+    monitoringActive = nextMonitoringState;
+    updateMonitoringButtonUI();
+
+    chrome.storage.local.set({ discount_ranges, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls, auto_buy_enabled, random_reload_min, random_reload_max });
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         chrome.tabs.sendMessage(tabs[0].id, {
@@ -414,7 +464,19 @@ applyButton.addEventListener("click", () => {
             image_urls,
             is_image_url_id_checked,
             image_id_urls,
-            auto_buy_enabled
+            auto_buy_enabled,
+            monitoringActive: monitoringActive,
+            random_reload_min,
+            random_reload_max
+        });
+    });
+});
+
+clearHistoryButton.addEventListener("click", () => {
+    chrome.storage.local.set({ purchase_history: [] }, () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs || !tabs[0]) return;
+            chrome.tabs.sendMessage(tabs[0].id, { action: "clearPurchaseHistory" });
         });
     });
 });

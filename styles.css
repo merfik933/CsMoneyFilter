@@ -164,6 +164,18 @@ input[type="file"] {
     background-color: #1f5f2f;
 }
 
+#apply-filter.monitoring-active {
+    background-color: #d64545;
+}
+
+#apply-filter.monitoring-active:hover {
+    background-color: #b23434;
+}
+
+#apply-filter.monitoring-active:active {
+    background-color: #902525;
+}
+
 .dropdown {
     position: relative;
     display: inline-block;

@@ -9,6 +9,9 @@ let image_urls = {};
 let is_image_url_id_checked = false;
 let image_id_urls = {};
 let filterActive = false;
+let randomReloadMin = 5;
+let randomReloadMax = 15;
+let reloadTimeoutId = null;
 
 function getProductCards() {
     const selectors = [
@@ -85,7 +88,7 @@ function getProductId(product) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "applyFilter") {
-        filterActive = true;
+        filterActive = message.monitoringActive !== undefined ? Boolean(message.monitoringActive) : true;
         discountRanges = Array.isArray(message.discount_ranges) && message.discount_ranges.length > 0
             ? message.discount_ranges
             : discountRanges;
@@ -106,9 +109,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         is_image_url_id_checked = message.is_image_url_id_checked;
         image_id_urls = message.image_id_urls;
 
+        if (typeof message.random_reload_min === "number") {
+            randomReloadMin = Math.max(0, message.random_reload_min);
+        }
+        if (typeof message.random_reload_max === "number") {
+            randomReloadMax = Math.max(randomReloadMin, message.random_reload_max);
+        }
+
+        if (!filterActive) {
+            clearPendingReload();
+        } else {
+            scheduleNextReload();
+        }
+
         filterProducts();
+        return;
+    }
+
+    if (message.action === "getMonitoringState") {
+        sendResponse({ monitoringActive: filterActive });
     }
 });
+
+function clearPendingReload() {
+    if (reloadTimeoutId) {
+        clearTimeout(reloadTimeoutId);
+        reloadTimeoutId = null;
+    }
+}
+
+function scheduleNextReload() {
+    clearPendingReload();
+    if (!filterActive) {
+        return;
+    }
+    const minMs = randomReloadMin * 1000;
+    const maxMs = randomReloadMax * 1000;
+    const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    reloadTimeoutId = setTimeout(() => {
+        tryReload();
+        scheduleNextReload();
+    }, delay);
+}
+
+function tryReload() {
+    const reloadButton = document.querySelector("[aria-label='Refresh results']");
+    if (reloadButton) {
+        reloadButton.click();
+    }
+}
 
 function filterProducts() {
     if (!filterActive) {
