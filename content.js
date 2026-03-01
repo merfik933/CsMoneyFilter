@@ -408,7 +408,7 @@ async function handleCartOverflowIfNeeded() {
 }
 
 async function runPurchaseFlow(attempt = 1) {
-    if (!addedThisCycle) {
+    if (!addedThisCycle && !cartHasItems()) {
         return;
     }
     if (cartFlowInProgress) {
@@ -430,7 +430,7 @@ async function runPurchaseFlow(attempt = 1) {
             confirmBtn.click();
         }
 
-        const portalBtn = await waitForElement(".portal svg[role='button']", 5000);
+        const portalBtn = await waitForElement("[data-scroll-locked='1'] .portal [tabindex='0'] svg[role='button']", 5000);
         if (!portalBtn) {
             cartFlowInProgress = false;
             return;
@@ -479,6 +479,15 @@ function waitForElement(selector, timeoutMs = 3000) {
 
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cartHasItems() {
+    const counter = document.querySelector("[data-popper-placement='top-end'] div:last-child");
+    if (!counter) {
+        return false;
+    }
+    const count = parseInt(counter.textContent.trim(), 10);
+    return !Number.isNaN(count) && count >= 1;
 }
 
 const observer = new MutationObserver((mutations) => {
