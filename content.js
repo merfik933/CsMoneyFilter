@@ -1,5 +1,21 @@
 console.log("Hello from content.js");
 
+function logInfo(msg, data) {
+    if (data !== undefined) {
+        console.log(`[CF] ${msg}`, data);
+    } else {
+        console.log(`[CF] ${msg}`);
+    }
+}
+
+function logError(msg, err) {
+    if (err !== undefined) {
+        console.error(`[CF][ERR] ${msg}`, err);
+    } else {
+        console.error(`[CF][ERR] ${msg}`);
+    }
+}
+
 let discountRanges = [{ min: 0, max: 100, color: "#1e365c", buy: false }];
 
 let is_image_url_checked = false;
@@ -165,6 +181,7 @@ function scheduleNextReload() {
         tryReload();
         scheduleNextReload();
     }, delay);
+    logInfo("Next reload scheduled", { delayMs: delay });
 }
 
 function tryReload() {
@@ -172,8 +189,9 @@ function tryReload() {
     addedThisCycle = false;
     const reloadButton = document.querySelector("[aria-label='Refresh results']");
     if (reloadButton) {
-        reloadButton.click();
+        safeClick(reloadButton).catch((e) => logError("Reload button click failed", e));
     }
+    logInfo("Reload triggered");
     setTimeout(() => {
         handleCartOverflowIfNeeded();
     }, 300);
@@ -280,11 +298,12 @@ function filterProducts() {
             if (productId && !isRecentlyPurchased(productId)) {
                 const addButton = product.querySelector("[aria-label='Add item to cart']");
                 if (addButton) {
-                    addButton.click();
+                    safeClick(addButton).catch((e) => logError("Add to cart click failed", e));
                     recordPurchase(productId);
                     clicksRemainingThisCycle -= 1;
                     addedThisCycle = true;
                     setTimeout(runPurchaseFlow, 500);
+                    logInfo("Item added to cart", { productId, remainingClicks: clicksRemainingThisCycle });
                 }
             }
         }
@@ -340,6 +359,7 @@ function loadPurchaseHistory() {
         const stored = sanitizeHistory(data.purchase_history);
         purchaseHistory = stored;
         pruneOldHistory();
+        logInfo("Purchase history loaded", { count: Object.keys(purchaseHistory).length });
     });
 }
 
@@ -393,17 +413,19 @@ async function handleCartOverflowIfNeeded() {
     if (Number.isNaN(count) || count < 10) {
         return;
     }
+    logInfo("Cart overflow detected", { count });
 
     const supportBtn = await waitForElement("#support-widget-parent button[type='button']", 2000);
     if (!supportBtn) {
+        logError("Support button not found during overflow handling");
         return;
     }
-    supportBtn.click();
+    await safeClick(supportBtn);
 
     const cartButtons = Array.from(document.querySelectorAll(".enter-done div[aria-label='Add item to cart']"));
+    logInfo("Clearing cart items via overflow handler", { buttons: cartButtons.length });
     for (const btn of cartButtons) {
-        btn.click();
-        await delay(200);
+        await safeClick(btn);
     }
 }
 
@@ -416,46 +438,54 @@ async function runPurchaseFlow(attempt = 1) {
     }
     const MAX_ATTEMPTS = 3;
     cartFlowInProgress = true;
+    logInfo("Purchase flow start", { attempt, addedThisCycle, cartHasItems: cartHasItems() });
 
     try {
         const supportBtn = await waitForElement("#support-widget-parent button[type='button']", 4000);
         if (!supportBtn) {
+            logError("Support button not found during purchase flow");
             cartFlowInProgress = false;
             return;
         }
-        supportBtn.click();
+        await safeClick(supportBtn);
 
         const confirmBtn = await waitForElement(".enter-done button[type='button']", 4000);
         if (confirmBtn) {
-            confirmBtn.click();
+            await safeClick(confirmBtn);
+        } else {
+            logInfo("Confirm button not found (may be already confirmed)");
         }
 
         const outcome = await waitForAny([
             "button[data-testid='items-not-available-action'][type='button']",
             "[data-testid='buy-success-step']"
-        ], 5000);
+        ], 10000);
 
         if (!outcome) {
+            logError("Outcome not found (success or not-available)");
             cartFlowInProgress = false;
             return;
         }
 
         if (outcome.selector === "button[data-testid='items-not-available-action'][type='button']") {
-            safeClick(outcome.element);
+            await safeClick(outcome.element);
             cartFlowInProgress = false;
             if (attempt < MAX_ATTEMPTS) {
                 setTimeout(() => runPurchaseFlow(attempt + 1), 800);
             }
+            logInfo("Items not available, retrying", { nextAttempt: attempt + 1 });
             return;
         }
 
         const portalBtn = document.querySelector("[data-scroll-locked='1'] .portal [tabindex='0'] svg[role='button']");
         if (portalBtn) {
             const portalClickTarget = portalBtn.closest("[tabindex], button, [role='button']") || portalBtn;
-            safeClick(portalClickTarget);
+            await safeClick(portalClickTarget);
+            logInfo("Purchase success, closing portal");
         }
     } finally {
         cartFlowInProgress = false;
+        logInfo("Purchase flow end");
     }
 }
 
@@ -479,6 +509,7 @@ function waitForElement(selector, timeoutMs = 3000) {
 
         setTimeout(() => {
             observer.disconnect();
+            logError("waitForElement timeout", { selector, timeoutMs });
             resolve(null);
         }, timeoutMs);
     });
@@ -502,6 +533,7 @@ function waitForAny(selectors, timeoutMs = 3000) {
         for (const sel of selectors) {
             const found = document.querySelector(sel);
             if (found) {
+                logInfo("waitForAny immediate hit", { selector: sel });
                 resolve({ element: found, selector: sel });
                 return;
             }
@@ -512,6 +544,7 @@ function waitForAny(selectors, timeoutMs = 3000) {
                 const el = document.querySelector(sel);
                 if (el) {
                     observer.disconnect();
+                    logInfo("waitForAny observed", { selector: sel });
                     resolve({ element: el, selector: sel });
                     return;
                 }
@@ -522,21 +555,30 @@ function waitForAny(selectors, timeoutMs = 3000) {
 
         setTimeout(() => {
             observer.disconnect();
+            logError("waitForAny timeout", { selectors, timeoutMs });
             resolve(null);
         }, timeoutMs);
     });
 }
 
-function safeClick(el) {
-    if (!el) {
-        return;
-    }
-    if (typeof el.click === "function") {
-        el.click();
-        return;
-    }
-    const evt = new MouseEvent("click", { bubbles: true, cancelable: true });
-    el.dispatchEvent(evt);
+function safeClick(el, delayMs = 200) {
+    return new Promise((resolve) => {
+        if (!el) {
+            logError("safeClick called with null element");
+            resolve(false);
+            return;
+        }
+        setTimeout(() => {
+            if (typeof el.click === "function") {
+                el.click();
+            } else {
+                const evt = new MouseEvent("click", { bubbles: true, cancelable: true });
+                el.dispatchEvent(evt);
+            }
+            logInfo("safeClick", { tag: el.tagName, classes: el.className, delayMs });
+            resolve(true);
+        }, delayMs);
+    });
 }
 
 const observer = new MutationObserver((mutations) => {
