@@ -174,6 +174,9 @@ function tryReload() {
     if (reloadButton) {
         reloadButton.click();
     }
+    setTimeout(() => {
+        handleCartOverflowIfNeeded();
+    }, 300);
     setTimeout(runPurchaseFlow, 500);
 }
 
@@ -381,6 +384,29 @@ function recordPurchase(id) {
     chrome.storage.local.set({ purchase_history: purchaseHistory });
 }
 
+async function handleCartOverflowIfNeeded() {
+    const counter = document.querySelector("[data-popper-placement='top-end'] div:last-child");
+    if (!counter) {
+        return;
+    }
+    const count = parseInt(counter.textContent.trim(), 10);
+    if (Number.isNaN(count) || count < 10) {
+        return;
+    }
+
+    const supportBtn = await waitForElement("#support-widget-parent button[type='button']", 2000);
+    if (!supportBtn) {
+        return;
+    }
+    supportBtn.click();
+
+    const cartButtons = Array.from(document.querySelectorAll(".enter-done div[aria-label='Add item to cart']"));
+    for (const btn of cartButtons) {
+        btn.click();
+        await delay(200);
+    }
+}
+
 async function runPurchaseFlow(attempt = 1) {
     if (!addedThisCycle) {
         return;
@@ -449,6 +475,10 @@ function waitForElement(selector, timeoutMs = 3000) {
             resolve(null);
         }, timeoutMs);
     });
+}
+
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const observer = new MutationObserver((mutations) => {
