@@ -430,15 +430,18 @@ async function runPurchaseFlow(attempt = 1) {
             confirmBtn.click();
         }
 
-        const portalBtn = await waitForElement("[data-scroll-locked='1'] .portal [tabindex='0'] svg[role='button']", 5000);
-        if (!portalBtn) {
+        const outcome = await waitForAny([
+            "button[data-testid='items-not-available-action'][type='button']",
+            "[data-testid='buy-success-step']"
+        ], 5000);
+
+        if (!outcome) {
             cartFlowInProgress = false;
             return;
         }
 
-        const notAvailableBtn = document.querySelector("button[data-testid='items-not-available-action'][type='button']");
-        if (notAvailableBtn) {
-            notAvailableBtn.click();
+        if (outcome.selector === "button[data-testid='items-not-available-action'][type='button']") {
+            safeClick(outcome.element);
             cartFlowInProgress = false;
             if (attempt < MAX_ATTEMPTS) {
                 setTimeout(() => runPurchaseFlow(attempt + 1), 800);
@@ -446,7 +449,11 @@ async function runPurchaseFlow(attempt = 1) {
             return;
         }
 
-        portalBtn.click();
+        const portalBtn = document.querySelector("[data-scroll-locked='1'] .portal [tabindex='0'] svg[role='button']");
+        if (portalBtn) {
+            const portalClickTarget = portalBtn.closest("[tabindex], button, [role='button']") || portalBtn;
+            safeClick(portalClickTarget);
+        }
     } finally {
         cartFlowInProgress = false;
     }
@@ -488,6 +495,48 @@ function cartHasItems() {
     }
     const count = parseInt(counter.textContent.trim(), 10);
     return !Number.isNaN(count) && count >= 1;
+}
+
+function waitForAny(selectors, timeoutMs = 3000) {
+    return new Promise((resolve) => {
+        for (const sel of selectors) {
+            const found = document.querySelector(sel);
+            if (found) {
+                resolve({ element: found, selector: sel });
+                return;
+            }
+        }
+
+        const observer = new MutationObserver(() => {
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    observer.disconnect();
+                    resolve({ element: el, selector: sel });
+                    return;
+                }
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(() => {
+            observer.disconnect();
+            resolve(null);
+        }, timeoutMs);
+    });
+}
+
+function safeClick(el) {
+    if (!el) {
+        return;
+    }
+    if (typeof el.click === "function") {
+        el.click();
+        return;
+    }
+    const evt = new MouseEvent("click", { bubbles: true, cancelable: true });
+    el.dispatchEvent(evt);
 }
 
 const observer = new MutationObserver((mutations) => {
