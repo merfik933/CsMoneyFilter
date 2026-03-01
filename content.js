@@ -32,6 +32,7 @@ let purchaseHistory = {};
 let clicksRemainingThisCycle = 0;
 let cartFlowInProgress = false;
 let addedThisCycle = false;
+let cycleInProgress = false;
 
 const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -119,12 +120,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         is_image_url_checked = message.is_image_url_checked;
         image_url_filter_type = message.image_url_filter_type;
-        image_urls_string = message.image_urls;
+        const image_urls_string = message.image_urls || [];
         image_urls = {};
         image_urls_string.forEach((url) => {
-            elements = url.split(';');
+            const elements = url.split(";");
             if (elements.length > 1) {
-                image_urls[elements[0]] = elements.slice(1)
+                image_urls[elements[0]] = elements.slice(1);
             } else {
                 image_urls[url] = [];
             }
@@ -178,24 +179,35 @@ function scheduleNextReload() {
     const maxMs = randomReloadMax * 1000;
     const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
     reloadTimeoutId = setTimeout(() => {
-        tryReload();
-        scheduleNextReload();
+        startReloadCycle();
     }, delay);
     logInfo("Next reload scheduled", { delayMs: delay });
 }
 
-function tryReload() {
+async function startReloadCycle() {
+    if (!filterActive || cycleInProgress) {
+        return;
+    }
+    cycleInProgress = true;
+    try {
+        await tryReload();
+        await handleCartOverflowIfNeeded();
+        await delay(500);
+        await runPurchaseFlow();
+    } finally {
+        cycleInProgress = false;
+        scheduleNextReload();
+    }
+}
+
+async function tryReload() {
     clicksRemainingThisCycle = 5;
     addedThisCycle = false;
     const reloadButton = document.querySelector("[aria-label='Refresh results']");
     if (reloadButton) {
-        safeClick(reloadButton).catch((e) => logError("Reload button click failed", e));
+        await safeClick(reloadButton).catch((e) => logError("Reload button click failed", e));
     }
     logInfo("Reload triggered");
-    setTimeout(() => {
-        handleCartOverflowIfNeeded();
-    }, 300);
-    setTimeout(runPurchaseFlow, 500);
 }
 
 function filterProducts() {
@@ -302,7 +314,6 @@ function filterProducts() {
                     recordPurchase(productId);
                     clicksRemainingThisCycle -= 1;
                     addedThisCycle = true;
-                    setTimeout(runPurchaseFlow, 500);
                     logInfo("Item added to cart", { productId, remainingClicks: clicksRemainingThisCycle });
                 }
             }
@@ -449,16 +460,20 @@ async function runPurchaseFlow(attempt = 1) {
         }
         await safeClick(supportBtn);
 
-        const confirmBtn = await waitForElement(".enter-done button[type='button']", 4000);
+        await delay(150);
+
+        const confirmBtn = await waitForConfirmButton(7000);
         if (confirmBtn) {
-            await safeClick(confirmBtn);
+            await safeClick(confirmBtn.element);
+            logInfo("Confirm button clicked", { selector: confirmBtn.selector });
         } else {
-            logInfo("Confirm button not found (may be already confirmed)");
+            logError("Confirm button not found during purchase flow");
         }
 
-        const outcome = await waitForAny([
+        const outcome = await waitForAnyDeep([
             "button[data-testid='items-not-available-action'][type='button']",
-            "[data-testid='buy-success-step']"
+            "[data-testid='buy-success-step']",
+            "div[data-testid='buy-success-step']"
         ], 10000);
 
         if (!outcome) {
@@ -487,6 +502,49 @@ async function runPurchaseFlow(attempt = 1) {
         cartFlowInProgress = false;
         logInfo("Purchase flow end");
     }
+}
+
+function querySelectorDeep(selector, root = document) {
+    const stack = [root];
+    while (stack.length) {
+        const node = stack.pop();
+        if (!node || typeof node.querySelector !== "function") {
+            continue;
+        }
+        const found = node.querySelector(selector);
+        if (found) {
+            return found;
+        }
+        const children = node.querySelectorAll("*");
+        children.forEach((child) => {
+            if (child.shadowRoot) {
+                stack.push(child.shadowRoot);
+            }
+        });
+    }
+    return null;
+}
+
+async function waitForConfirmButton(timeoutMs = 6000) {
+    const selectors = [
+        ".enter-done button[type='button']",
+        ".enter-active button[type='button']",
+        ".portal button[type='button']",
+        "button[data-testid='buy-items-button']",
+        "button[data-testid='checkout-button']"
+    ];
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        for (const selector of selectors) {
+            const el = querySelectorDeep(selector);
+            if (el) {
+                return { element: el, selector };
+            }
+        }
+        await delay(100);
+    }
+    logError("Confirm button wait timeout", { timeoutMs, selectors });
+    return null;
 }
 
 function waitForElement(selector, timeoutMs = 3000) {
@@ -558,6 +616,29 @@ function waitForAny(selectors, timeoutMs = 3000) {
             logError("waitForAny timeout", { selectors, timeoutMs });
             resolve(null);
         }, timeoutMs);
+    });
+}
+
+function waitForAnyDeep(selectors, timeoutMs = 3000, pollIntervalMs = 100) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const check = () => {
+            for (const sel of selectors) {
+                const el = querySelectorDeep(sel);
+                if (el) {
+                    logInfo("waitForAnyDeep hit", { selector: sel });
+                    resolve({ element: el, selector: sel });
+                    return;
+                }
+            }
+            if (Date.now() - start >= timeoutMs) {
+                logError("waitForAnyDeep timeout", { selectors, timeoutMs });
+                resolve(null);
+                return;
+            }
+            setTimeout(check, pollIntervalMs);
+        };
+        check();
     });
 }
 
