@@ -14,6 +14,8 @@ let randomReloadMax = 15;
 let reloadTimeoutId = null;
 let purchaseHistory = {};
 let clicksRemainingThisCycle = 0;
+let cartFlowInProgress = false;
+let addedThisCycle = false;
 
 const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -167,10 +169,12 @@ function scheduleNextReload() {
 
 function tryReload() {
     clicksRemainingThisCycle = 5;
+    addedThisCycle = false;
     const reloadButton = document.querySelector("[aria-label='Refresh results']");
     if (reloadButton) {
         reloadButton.click();
     }
+    setTimeout(runPurchaseFlow, 500);
 }
 
 function filterProducts() {
@@ -276,6 +280,8 @@ function filterProducts() {
                     addButton.click();
                     recordPurchase(productId);
                     clicksRemainingThisCycle -= 1;
+                    addedThisCycle = true;
+                    setTimeout(runPurchaseFlow, 500);
                 }
             }
         }
@@ -373,6 +379,76 @@ function isRecentlyPurchased(id) {
 function recordPurchase(id) {
     purchaseHistory[id] = Date.now();
     chrome.storage.local.set({ purchase_history: purchaseHistory });
+}
+
+async function runPurchaseFlow(attempt = 1) {
+    if (!addedThisCycle) {
+        return;
+    }
+    if (cartFlowInProgress) {
+        return;
+    }
+    const MAX_ATTEMPTS = 3;
+    cartFlowInProgress = true;
+
+    try {
+        const supportBtn = await waitForElement("#support-widget-parent button[type='button']", 4000);
+        if (!supportBtn) {
+            cartFlowInProgress = false;
+            return;
+        }
+        supportBtn.click();
+
+        const confirmBtn = await waitForElement(".enter-done button[type='button']", 4000);
+        if (confirmBtn) {
+            confirmBtn.click();
+        }
+
+        const portalBtn = await waitForElement(".portal svg[role='button']", 5000);
+        if (!portalBtn) {
+            cartFlowInProgress = false;
+            return;
+        }
+
+        const notAvailableBtn = document.querySelector("button[data-testid='items-not-available-action'][type='button']");
+        if (notAvailableBtn) {
+            notAvailableBtn.click();
+            cartFlowInProgress = false;
+            if (attempt < MAX_ATTEMPTS) {
+                setTimeout(() => runPurchaseFlow(attempt + 1), 800);
+            }
+            return;
+        }
+
+        portalBtn.click();
+    } finally {
+        cartFlowInProgress = false;
+    }
+}
+
+function waitForElement(selector, timeoutMs = 3000) {
+    return new Promise((resolve) => {
+        const found = document.querySelector(selector);
+        if (found) {
+            resolve(found);
+            return;
+        }
+
+        const observer = new MutationObserver(() => {
+            const el = document.querySelector(selector);
+            if (el) {
+                observer.disconnect();
+                resolve(el);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        setTimeout(() => {
+            observer.disconnect();
+            resolve(null);
+        }, timeoutMs);
+    });
 }
 
 const observer = new MutationObserver((mutations) => {
