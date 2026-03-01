@@ -12,6 +12,12 @@ let filterActive = false;
 let randomReloadMin = 5;
 let randomReloadMax = 15;
 let reloadTimeoutId = null;
+let purchaseHistory = {};
+let clicksRemainingThisCycle = 0;
+
+const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
+
+loadPurchaseHistory();
 
 function getProductCards() {
     const selectors = [
@@ -117,8 +123,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         if (!filterActive) {
+            clicksRemainingThisCycle = 0;
             clearPendingReload();
         } else {
+            clicksRemainingThisCycle = 5;
             scheduleNextReload();
         }
 
@@ -128,6 +136,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.action === "getMonitoringState") {
         sendResponse({ monitoringActive: filterActive });
+    }
+
+    if (message.action === "clearPurchaseHistory") {
+        purchaseHistory = {};
+        chrome.storage.local.set({ purchase_history: purchaseHistory });
     }
 });
 
@@ -153,6 +166,7 @@ function scheduleNextReload() {
 }
 
 function tryReload() {
+    clicksRemainingThisCycle = 5;
     const reloadButton = document.querySelector("[aria-label='Refresh results']");
     if (reloadButton) {
         reloadButton.click();
@@ -167,7 +181,9 @@ function filterProducts() {
     let products = getProductCards();
     
     products.forEach((product) => {
+        const productId = getProductId(product);
         let shouldHighlight = false;
+        let matchedRange = null;
         
         // Перевіряємо фільтри
         // 1. Фільтр по знижкам (діапазони)
@@ -176,6 +192,7 @@ function filterProducts() {
         for (const range of discountRanges) {
             if (discount >= range.min && discount <= range.max) {
                 matchedRangeColor = range.color;
+                matchedRange = range;
                 break;
             }
         }
@@ -247,6 +264,20 @@ function filterProducts() {
             } else {
                 bgElement.style.backgroundColor = "";
             }
+
+            const isPurchased = productId && isRecentlyPurchased(productId);
+            bgElement.style.filter = isPurchased ? "brightness(0.65)" : "";
+        }
+
+        if (shouldHighlight && matchedRange && matchedRange.buy === true && clicksRemainingThisCycle > 0) {
+            if (productId && !isRecentlyPurchased(productId)) {
+                const addButton = product.querySelector("[aria-label='Add item to cart']");
+                if (addButton) {
+                    addButton.click();
+                    recordPurchase(productId);
+                    clicksRemainingThisCycle -= 1;
+                }
+            }
         }
 
         // Додаємо кнопку видалення (для чорного списку ID)
@@ -293,6 +324,55 @@ function filterProducts() {
             product.appendChild(button);
         }
     });
+}
+
+function loadPurchaseHistory() {
+    chrome.storage.local.get(["purchase_history"], (data) => {
+        const stored = sanitizeHistory(data.purchase_history);
+        purchaseHistory = stored;
+        pruneOldHistory();
+    });
+}
+
+function sanitizeHistory(raw) {
+    if (!raw || typeof raw !== "object") {
+        return {};
+    }
+    const now = Date.now();
+    const cleaned = {};
+    Object.entries(raw).forEach(([id, ts]) => {
+        if (typeof ts === "number" && now - ts < HISTORY_TTL_MS) {
+            cleaned[id] = ts;
+        }
+    });
+    return cleaned;
+}
+
+function pruneOldHistory() {
+    const now = Date.now();
+    let changed = false;
+    Object.entries(purchaseHistory).forEach(([id, ts]) => {
+        if (now - ts >= HISTORY_TTL_MS) {
+            delete purchaseHistory[id];
+            changed = true;
+        }
+    });
+    if (changed) {
+        chrome.storage.local.set({ purchase_history: purchaseHistory });
+    }
+}
+
+function isRecentlyPurchased(id) {
+    if (!purchaseHistory[id]) {
+        return false;
+    }
+    const age = Date.now() - purchaseHistory[id];
+    return age < HISTORY_TTL_MS;
+}
+
+function recordPurchase(id) {
+    purchaseHistory[id] = Date.now();
+    chrome.storage.local.set({ purchase_history: purchaseHistory });
 }
 
 const observer = new MutationObserver((mutations) => {

@@ -3,7 +3,7 @@ const addDiscountRangeButton = document.getElementById("add-discount-range");
 const autoBuyCheckbox = document.getElementById("auto-buy");
 const randomReloadMinInput = document.getElementById("random-reload-min");
 const randomReloadMaxInput = document.getElementById("random-reload-max");
-const clearHistoryButton = document.getElementById("clear-history");
+const clearPurchaseHistoryButton = document.getElementById("clear-purchase-history");
 
 const addNew = document.querySelector(".add-new");
 const addNew_id = document.querySelector(".add-new-id");
@@ -283,12 +283,18 @@ chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "i
     if (data.random_reload_min !== undefined) randomReloadMinInput.value = data.random_reload_min;
     if (data.random_reload_max !== undefined) randomReloadMaxInput.value = data.random_reload_max;
 
-    const now = Date.now();
-    const cutoff = now - 24 * 60 * 60 * 1000;
-    if (Array.isArray(data.purchase_history)) {
-        const prunedHistory = data.purchase_history.filter((item) => item && item.ts && item.ts >= cutoff);
-        if (prunedHistory.length !== data.purchase_history.length) {
-            chrome.storage.local.set({ purchase_history: prunedHistory });
+    // Prune purchase history entries older than 24 hours
+    if (data.purchase_history) {
+        const now = Date.now();
+        const ttl = 24 * 60 * 60 * 1000;
+        const cleaned = {};
+        Object.entries(data.purchase_history).forEach(([id, ts]) => {
+            if (typeof ts === "number" && now - ts < ttl) {
+                cleaned[id] = ts;
+            }
+        });
+        if (Object.keys(cleaned).length !== Object.keys(data.purchase_history).length) {
+            chrome.storage.local.set({ purchase_history: cleaned });
         }
     }
 
@@ -472,12 +478,12 @@ applyButton.addEventListener("click", () => {
     });
 });
 
-clearHistoryButton.addEventListener("click", () => {
-    chrome.storage.local.set({ purchase_history: [] }, () => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (!tabs || !tabs[0]) return;
+clearPurchaseHistoryButton.addEventListener("click", () => {
+    chrome.storage.local.set({ purchase_history: {} });
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0]) {
             chrome.tabs.sendMessage(tabs[0].id, { action: "clearPurchaseHistory" });
-        });
+        }
     });
 });
 
