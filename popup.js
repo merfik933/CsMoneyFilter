@@ -3,6 +3,8 @@ const addDiscountRangeButton = document.getElementById("add-discount-range");
 const autoBuyCheckbox = document.getElementById("auto-buy");
 const randomReloadMinInput = document.getElementById("random-reload-min");
 const randomReloadMaxInput = document.getElementById("random-reload-max");
+const hardReloadMinutesInput = document.getElementById("hard-reload-minutes");
+const ignore1mTagCheckbox = document.getElementById("ignore-1m-tag");
 const clearPurchaseHistoryButton = document.getElementById("clear-purchase-history");
 
 const addNew = document.querySelector(".add-new");
@@ -278,10 +280,12 @@ autoBuyCheckbox.addEventListener("change", () => {
 });
 
 // get data from storage
-chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls", "auto_buy_enabled", "random_reload_min", "random_reload_max", "purchase_history"], (data) => {
+chrome.storage.local.get(["discount_ranges", "min", "max", "highlight_color", "is_image_url_checked", "image_url_filter_type", "image_urls", "is_image_url_id_checked", "image_id_urls", "auto_buy_enabled", "random_reload_min", "random_reload_max", "hard_reload_minutes", "ignore_1m_tag", "purchase_history"], (data) => {
     if (data.auto_buy_enabled !== undefined) autoBuyCheckbox.checked = data.auto_buy_enabled;
     if (data.random_reload_min !== undefined) randomReloadMinInput.value = data.random_reload_min;
     if (data.random_reload_max !== undefined) randomReloadMaxInput.value = data.random_reload_max;
+    if (data.hard_reload_minutes !== undefined) hardReloadMinutesInput.value = data.hard_reload_minutes;
+    if (data.ignore_1m_tag !== undefined) ignore1mTagCheckbox.checked = Boolean(data.ignore_1m_tag);
 
     // Prune purchase history entries older than 24 hours
     if (data.purchase_history) {
@@ -400,6 +404,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 const applyButton = document.getElementById("apply-filter");
 let monitoringActive = false;
 
+function generateMonitoringSessionToken() {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function updateMonitoringButtonUI() {
     applyButton.textContent = monitoringActive ? "Закінчити моніторинг" : "Розпочати моніторинг";
     applyButton.classList.toggle("monitoring-active", monitoringActive);
@@ -428,41 +436,57 @@ updateMonitoringButtonUI();
 syncMonitoringStateFromPage();
 
 applyButton.addEventListener("click", () => {
-    const discount_ranges = readDiscountRangesFromUI();
-    const rangesError = validateDiscountRanges(discount_ranges);
-    if (rangesError) {
-        alert(rangesError);
-        return;
-    }
-
-    const is_image_url_checked = document.getElementById("image-filter-checkbox").checked;
-    const image_url_filter_type = document.getElementById("image-filter-type").value;
-    const image_url_list = document.querySelectorAll(".list-item p");
-    let image_urls = [];
-    image_url_list.forEach((element) => {
-        image_urls.push(element.textContent);
-    });
-
-    const is_image_url_id_checked = document.getElementById("image-id-filter-checkbox").checked;
-    const image_id_url_list = document.querySelectorAll(".list-item-id p");
-    let image_id_urls = [];
-    image_id_url_list.forEach((element) => {
-        image_id_urls.push(element.textContent);
-    });
-
-    const auto_buy_enabled = autoBuyCheckbox.checked;
-
-    const random_reload_min = Math.max(0, parseInt(randomReloadMinInput.value, 10) || 0);
-    const random_reload_max = Math.max(random_reload_min, parseInt(randomReloadMaxInput.value, 10) || random_reload_min);
-
-    const nextMonitoringState = !monitoringActive;
-    monitoringActive = nextMonitoringState;
-    updateMonitoringButtonUI();
-
-    chrome.storage.local.set({ discount_ranges, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls, auto_buy_enabled, random_reload_min, random_reload_max });
-
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        chrome.tabs.sendMessage(tabs[0].id, {
+        const activeTab = tabs && tabs[0];
+        if (!activeTab) {
+            return;
+        }
+
+        const discount_ranges = readDiscountRangesFromUI();
+        const rangesError = validateDiscountRanges(discount_ranges);
+        if (rangesError) {
+            alert(rangesError);
+            return;
+        }
+
+        const is_image_url_checked = document.getElementById("image-filter-checkbox").checked;
+        const image_url_filter_type = document.getElementById("image-filter-type").value;
+        const image_url_list = document.querySelectorAll(".list-item p");
+        let image_urls = [];
+        image_url_list.forEach((element) => {
+            image_urls.push(element.textContent);
+        });
+
+        const is_image_url_id_checked = document.getElementById("image-id-filter-checkbox").checked;
+        const image_id_url_list = document.querySelectorAll(".list-item-id p");
+        let image_id_urls = [];
+        image_id_url_list.forEach((element) => {
+            image_id_urls.push(element.textContent);
+        });
+
+        const auto_buy_enabled = autoBuyCheckbox.checked;
+        const ignore_1m_tag = ignore1mTagCheckbox.checked;
+
+        const random_reload_min = Math.max(0, parseInt(randomReloadMinInput.value, 10) || 0);
+        const random_reload_max = Math.max(random_reload_min, parseInt(randomReloadMaxInput.value, 10) || random_reload_min);
+        const hard_reload_minutes = Math.max(0, parseInt(hardReloadMinutesInput.value, 10) || 0);
+
+        const nextMonitoringState = !monitoringActive;
+        monitoringActive = nextMonitoringState;
+        updateMonitoringButtonUI();
+
+        const monitoring_session_token = monitoringActive ? generateMonitoringSessionToken() : null;
+
+        let monitoring_origin = null;
+        try {
+            monitoring_origin = new URL(activeTab.url).origin;
+        } catch (e) {
+            monitoring_origin = null;
+        }
+
+        chrome.storage.local.set({ discount_ranges, is_image_url_checked, image_url_filter_type, image_urls, is_image_url_id_checked, image_id_urls, auto_buy_enabled, random_reload_min, random_reload_max, hard_reload_minutes, ignore_1m_tag, monitoring_active: monitoringActive, monitoring_origin, monitoring_session_token });
+
+        chrome.tabs.sendMessage(activeTab.id, {
             action: "applyFilter",
             discount_ranges,
             is_image_url_checked,
@@ -473,7 +497,11 @@ applyButton.addEventListener("click", () => {
             auto_buy_enabled,
             monitoringActive: monitoringActive,
             random_reload_min,
-            random_reload_max
+            random_reload_max,
+            hard_reload_minutes,
+            ignore_1m_tag,
+            monitoring_origin,
+            monitoring_session_token
         });
     });
 });

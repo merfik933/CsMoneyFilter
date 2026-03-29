@@ -27,16 +27,25 @@ let image_id_urls = {};
 let filterActive = false;
 let randomReloadMin = 5;
 let randomReloadMax = 15;
+let autoBuyEnabled = false;
 let reloadTimeoutId = null;
 let purchaseHistory = {};
 let clicksRemainingThisCycle = 0;
 let cartFlowInProgress = false;
 let addedThisCycle = false;
 let cycleInProgress = false;
+let hardReloadIntervalMs = 20 * 60 * 1000;
+let lastHardReload = Date.now();
+let monitoringOrigin = null;
+let ignore1mTag = true;
+const MONITORING_SESSION_KEY = "cf_monitoring_session_token";
+const MAX_CYCLE_AUTOBUY_CLICKS = 50;
+const MAX_PURCHASE_ROUNDS_PER_CYCLE = 8;
 
 const HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 
 loadPurchaseHistory();
+restoreMonitoringState();
 
 function getProductCards() {
     const selectors = [
@@ -113,6 +122,14 @@ function getProductId(product) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "applyFilter") {
+        const incomingOrigin = message.monitoring_origin || window.location.origin;
+        if (incomingOrigin !== window.location.origin) {
+            logInfo("applyFilter ignored for different origin", { incomingOrigin, currentOrigin: window.location.origin });
+            return;
+        }
+
+        monitoringOrigin = incomingOrigin;
+
         filterActive = message.monitoringActive !== undefined ? Boolean(message.monitoringActive) : true;
         discountRanges = Array.isArray(message.discount_ranges) && message.discount_ranges.length > 0
             ? message.discount_ranges
@@ -133,6 +150,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         is_image_url_id_checked = message.is_image_url_id_checked;
         image_id_urls = message.image_id_urls;
+        autoBuyEnabled = Boolean(message.auto_buy_enabled);
+        ignore1mTag = message.ignore_1m_tag !== undefined ? Boolean(message.ignore_1m_tag) : true;
+        const incomingSessionToken = typeof message.monitoring_session_token === "string"
+            ? message.monitoring_session_token
+            : null;
+
+        if (filterActive) {
+            const tokenToPersist = incomingSessionToken || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            sessionStorage.setItem(MONITORING_SESSION_KEY, tokenToPersist);
+        } else {
+            sessionStorage.removeItem(MONITORING_SESSION_KEY);
+        }
+
+        if (typeof message.hard_reload_minutes === "number" && message.hard_reload_minutes >= 0) {
+            hardReloadIntervalMs = message.hard_reload_minutes * 60 * 1000;
+        }
+        lastHardReload = Date.now();
 
         if (typeof message.random_reload_min === "number") {
             randomReloadMin = Math.max(0, message.random_reload_min);
@@ -188,20 +222,64 @@ async function startReloadCycle() {
     if (!filterActive || cycleInProgress) {
         return;
     }
+    if (monitoringOrigin && monitoringOrigin !== window.location.origin) {
+        logInfo("startReloadCycle skipped: origin mismatch", { monitoringOrigin, currentOrigin: window.location.origin });
+        return;
+    }
+    if (hardReloadIntervalMs > 0 && Date.now() - lastHardReload >= hardReloadIntervalMs) {
+        lastHardReload = Date.now();
+        logInfo("Hard reload to recover resources", { intervalMs: hardReloadIntervalMs });
+        window.location.reload();
+        return;
+    }
     cycleInProgress = true;
     try {
-        await tryReload();
-        await handleCartOverflowIfNeeded();
-        await delay(500);
-        await runPurchaseFlow();
+        const hasPendingBeforeReload = autoBuyEnabled && (cartHasItems() || hasPendingAutoBuyCandidates());
+        if (hasPendingBeforeReload) {
+            logInfo("Reload skipped because pending purchases exist");
+        } else {
+            await tryReload();
+        }
+
+        await processPurchasesUntilSettled();
     } finally {
         cycleInProgress = false;
         scheduleNextReload();
     }
 }
 
+async function processPurchasesUntilSettled() {
+    if (!autoBuyEnabled) {
+        return;
+    }
+
+    for (let round = 1; round <= MAX_PURCHASE_ROUNDS_PER_CYCLE; round++) {
+        clicksRemainingThisCycle = MAX_CYCLE_AUTOBUY_CLICKS;
+        addedThisCycle = false;
+        const passResult = filterProducts();
+
+        await delay(350);
+        await handleCartOverflowIfNeeded();
+        await delay(350);
+
+        if (addedThisCycle || cartHasItems()) {
+            await runPurchaseFlow();
+            await delay(600);
+        }
+
+        const stillHasCandidates = hasPendingAutoBuyCandidates();
+        const stillHasCartItems = cartHasItems();
+        if (!stillHasCandidates && !stillHasCartItems && (!passResult || passResult.addedCount === 0)) {
+            logInfo("Purchase settle completed", { round });
+            return;
+        }
+    }
+
+    logInfo("Purchase settle reached max rounds", { maxRounds: MAX_PURCHASE_ROUNDS_PER_CYCLE });
+}
+
 async function tryReload() {
-    clicksRemainingThisCycle = 5;
+    clicksRemainingThisCycle = MAX_CYCLE_AUTOBUY_CLICKS;
     addedThisCycle = false;
     const reloadButton = document.querySelector("[aria-label='Refresh results']");
     if (reloadButton) {
@@ -210,88 +288,134 @@ async function tryReload() {
     logInfo("Reload triggered");
 }
 
+function hasIgnoredWearTag(product) {
+    if (!ignore1mTag) {
+        return false;
+    }
+
+    const tagNodes = product.querySelectorAll("span[class*='Tag-module_content']");
+    for (const node of tagNodes) {
+        const tagText = (node.innerText || "").trim().toLowerCase();
+        if (tagText === "1m") {
+            return true;
+        }
+    }
+    return false;
+}
+
+function evaluateProductMatch(product) {
+    let shouldHighlight = false;
+    let matchedRange = null;
+    let matchedRangeColor = null;
+
+    if (hasIgnoredWearTag(product)) {
+        return { shouldHighlight: false, matchedRange: null, matchedRangeColor: null };
+    }
+
+    const discount = getDiscountValue(product);
+    for (const range of discountRanges) {
+        if (discount >= range.min && discount <= range.max) {
+            matchedRangeColor = range.color;
+            matchedRange = range;
+            break;
+        }
+    }
+    shouldHighlight = matchedRangeColor !== null;
+
+    if (shouldHighlight && is_image_url_checked) {
+        const imageElementSrc = getImageSrc(product);
+        const mvElements = getMvElements(product);
+
+        if (image_url_filter_type === "blacklist") {
+            let isInBlacklist = false;
+            for (const [url, mvs] of Object.entries(image_urls)) {
+                if (imageElementSrc && imageElementSrc.includes(url)) {
+                    if (mvs.length !== 0) {
+                        mvs.forEach((mv) => {
+                            if (mvElements) {
+                                mvElements.forEach((mvElement) => {
+                                    if (mvElement.innerText.includes(mv)) {
+                                        isInBlacklist = true;
+                                    }
+                                });
+                            }
+                        });
+                    } else {
+                        isInBlacklist = true;
+                    }
+                }
+            }
+            shouldHighlight = !isInBlacklist;
+        } else if (image_url_filter_type === "whitelist") {
+            let isWhitelisted = false;
+            for (const [url, mvs] of Object.entries(image_urls)) {
+                if (imageElementSrc && imageElementSrc.includes(url)) {
+                    if (mvs.length !== 0) {
+                        mvs.forEach((mv) => {
+                            if (mvElements) {
+                                mvElements.forEach((mvElement) => {
+                                    if (mvElement.innerText.includes(mv)) {
+                                        isWhitelisted = true;
+                                    }
+                                });
+                            }
+                        });
+                    } else {
+                        isWhitelisted = true;
+                    }
+                }
+            }
+            shouldHighlight = isWhitelisted;
+        }
+    }
+
+    if (shouldHighlight && is_image_url_id_checked) {
+        const id = getProductId(product);
+        if (id && image_id_urls.includes(id)) {
+            shouldHighlight = false;
+        }
+    }
+
+    return { shouldHighlight, matchedRange, matchedRangeColor };
+}
+
+function hasPendingAutoBuyCandidates() {
+    if (!autoBuyEnabled) {
+        return false;
+    }
+
+    const products = getProductCards();
+    for (const product of products) {
+        const productId = getProductId(product);
+        if (productId && isRecentlyPurchased(productId)) {
+            continue;
+        }
+
+        const { shouldHighlight, matchedRange } = evaluateProductMatch(product);
+        if (!shouldHighlight || !matchedRange || matchedRange.buy !== true) {
+            continue;
+        }
+
+        const addButton = product.querySelector("[aria-label='Add item to cart']");
+        if (addButton) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function filterProducts() {
     if (!filterActive) {
-        return;
+        return { addedCount: 0 };
     }
     
     let products = getProductCards();
+    let addedCount = 0;
     
     products.forEach((product) => {
         const productId = getProductId(product);
-        let shouldHighlight = false;
-        let matchedRange = null;
-        
-        // Перевіряємо фільтри
-        // 1. Фільтр по знижкам (діапазони)
-        let matchedRangeColor = null;
-        const discount = getDiscountValue(product);
-        for (const range of discountRanges) {
-            if (discount >= range.min && discount <= range.max) {
-                matchedRangeColor = range.color;
-                matchedRange = range;
-                break;
-            }
-        }
-        shouldHighlight = matchedRangeColor !== null;
-        
-        // 2. Фільтр по URL зображень + MW
-        if (shouldHighlight && is_image_url_checked) {
-            const imageElementSrc = getImageSrc(product);
-            const mvElements = getMvElements(product);
-
-            if (image_url_filter_type === "blacklist") {
-                // Чорний список - виділяємо товари які НЕ в списку
-                let isInBlacklist = false;
-                for (const [url, mvs] of Object.entries(image_urls)) {
-                    if (imageElementSrc && imageElementSrc.includes(url)) {
-                        if (mvs.length !== 0) {
-                            mvs.forEach((mv) => {
-                                if (mvElements) {
-                                    mvElements.forEach((mvElement) => {
-                                        if (mvElement.innerText.includes(mv)) {
-                                            isInBlacklist = true;
-                                        }
-                                    });
-                                }
-                            });
-                        } else {
-                            isInBlacklist = true;
-                        }
-                    }
-                }
-                shouldHighlight = !isInBlacklist;
-            } else if (image_url_filter_type === "whitelist") {
-                // Білий список - виділяємо тільки товари які В списку
-                let isWhitelisted = false;
-                for (const [url, mvs] of Object.entries(image_urls)) {
-                    if (imageElementSrc && imageElementSrc.includes(url)) {
-                        if (mvs.length !== 0) {
-                            mvs.forEach((mv) => {
-                                if (mvElements) {
-                                    mvElements.forEach((mvElement) => {
-                                        if (mvElement.innerText.includes(mv)) {
-                                            isWhitelisted = true;
-                                        }
-                                    });
-                                }
-                            });
-                        } else {
-                            isWhitelisted = true;
-                        }
-                    }
-                }
-                shouldHighlight = isWhitelisted;
-            }
-        }
-        
-        // 3. Фільтр по ID - приховуємо товари в чорному списку
-        if (shouldHighlight && is_image_url_id_checked) {
-            const id = getProductId(product);
-            if (id && image_id_urls.includes(id)) {
-                shouldHighlight = false;
-            }
-        }
+        const { shouldHighlight, matchedRange, matchedRangeColor } = evaluateProductMatch(product);
 
         // Застосовуємо виділення
         const bgElement = findBackgroundElement(product);
@@ -306,7 +430,7 @@ function filterProducts() {
             bgElement.style.filter = isPurchased ? "brightness(0.65)" : "";
         }
 
-        if (shouldHighlight && matchedRange && matchedRange.buy === true && clicksRemainingThisCycle > 0) {
+        if (autoBuyEnabled && shouldHighlight && matchedRange && matchedRange.buy === true && clicksRemainingThisCycle > 0) {
             if (productId && !isRecentlyPurchased(productId)) {
                 const addButton = product.querySelector("[aria-label='Add item to cart']");
                 if (addButton) {
@@ -314,6 +438,7 @@ function filterProducts() {
                     recordPurchase(productId);
                     clicksRemainingThisCycle -= 1;
                     addedThisCycle = true;
+                    addedCount += 1;
                     logInfo("Item added to cart", { productId, remainingClicks: clicksRemainingThisCycle });
                 }
             }
@@ -363,6 +488,8 @@ function filterProducts() {
             product.appendChild(button);
         }
     });
+
+    return { addedCount };
 }
 
 function loadPurchaseHistory() {
@@ -415,6 +542,117 @@ function recordPurchase(id) {
     chrome.storage.local.set({ purchase_history: purchaseHistory });
 }
 
+function getNavigationType() {
+    try {
+        const entries = performance.getEntriesByType("navigation");
+        if (entries && entries.length > 0 && entries[0].type) {
+            return entries[0].type;
+        }
+    } catch (e) {
+        logError("Failed to read navigation entries", e);
+    }
+
+    if (performance && performance.navigation) {
+        if (performance.navigation.type === 1) {
+            return "reload";
+        }
+        if (performance.navigation.type === 0) {
+            return "navigate";
+        }
+    }
+
+    return "navigate";
+}
+
+function restoreMonitoringState() {
+    chrome.storage.local.get([
+        "monitoring_active",
+        "monitoring_origin",
+        "discount_ranges",
+        "is_image_url_checked",
+        "image_url_filter_type",
+        "image_urls",
+        "is_image_url_id_checked",
+        "image_id_urls",
+        "auto_buy_enabled",
+        "random_reload_min",
+        "random_reload_max",
+        "hard_reload_minutes",
+        "ignore_1m_tag",
+        "monitoring_session_token"
+    ], (data) => {
+        if (!data.monitoring_active) {
+            return;
+        }
+
+        const navigationType = getNavigationType();
+        if (navigationType !== "reload") {
+            logInfo("restoreMonitoringState skipped: non-reload navigation", { navigationType });
+            filterActive = false;
+            clearPendingReload();
+            return;
+        }
+
+        const storedOrigin = data.monitoring_origin || window.location.origin;
+        if (storedOrigin !== window.location.origin) {
+            logInfo("restoreMonitoringState skipped: different origin", { storedOrigin, currentOrigin: window.location.origin });
+            return;
+        }
+
+        const storedSessionToken = typeof data.monitoring_session_token === "string"
+            ? data.monitoring_session_token
+            : null;
+        const localSessionToken = sessionStorage.getItem(MONITORING_SESSION_KEY);
+        if (!storedSessionToken || !localSessionToken || storedSessionToken !== localSessionToken) {
+            logInfo("restoreMonitoringState skipped: tab session mismatch", {
+                hasStoredToken: Boolean(storedSessionToken),
+                hasLocalToken: Boolean(localSessionToken)
+            });
+            filterActive = false;
+            clearPendingReload();
+            return;
+        }
+
+        monitoringOrigin = storedOrigin;
+        filterActive = true;
+        discountRanges = Array.isArray(data.discount_ranges) && data.discount_ranges.length > 0
+            ? data.discount_ranges
+            : discountRanges;
+        is_image_url_checked = Boolean(data.is_image_url_checked);
+        image_url_filter_type = data.image_url_filter_type || image_url_filter_type;
+        image_urls = {};
+        (data.image_urls || []).forEach((url) => {
+            const parts = url.split(";");
+            if (parts.length > 1) {
+                image_urls[parts[0]] = parts.slice(1);
+            } else {
+                image_urls[url] = [];
+            }
+        });
+        is_image_url_id_checked = Boolean(data.is_image_url_id_checked);
+        image_id_urls = data.image_id_urls || [];
+        autoBuyEnabled = Boolean(data.auto_buy_enabled);
+        ignore1mTag = data.ignore_1m_tag !== undefined ? Boolean(data.ignore_1m_tag) : true;
+
+        if (typeof data.random_reload_min === "number") {
+            randomReloadMin = Math.max(0, data.random_reload_min);
+        }
+        if (typeof data.random_reload_max === "number") {
+            randomReloadMax = Math.max(randomReloadMin, data.random_reload_max);
+        }
+
+        if (typeof data.hard_reload_minutes === "number" && data.hard_reload_minutes >= 0) {
+            hardReloadIntervalMs = data.hard_reload_minutes * 60 * 1000;
+        }
+
+        clicksRemainingThisCycle = 5;
+        lastHardReload = Date.now();
+        filterProducts();
+        scheduleNextReload();
+        logInfo("Monitoring restored after reload");
+    });
+}
+
 async function handleCartOverflowIfNeeded() {
     const counter = document.querySelector("[data-popper-placement='top-end'] div:last-child");
     if (!counter) {
@@ -441,6 +679,9 @@ async function handleCartOverflowIfNeeded() {
 }
 
 async function runPurchaseFlow(attempt = 1) {
+    if (!autoBuyEnabled) {
+        return;
+    }
     if (!addedThisCycle && !cartHasItems()) {
         return;
     }
