@@ -326,46 +326,25 @@ function evaluateProductMatch(product) {
         const imageElementSrc = getImageSrc(product);
         const mvElements = getMvElements(product);
 
+        const matchesImageRule = Object.entries(image_urls).some(([url, values]) => {
+            if (!imageElementSrc || !imageElementSrc.includes(url)) {
+                return false;
+            }
+
+            const tags = values.map((value) => value.trim()).filter(Boolean);
+            const lastValue = tags[tags.length - 1];
+            const hasDiscount = lastValue !== undefined && /^\d+(?:[.,]\d+)?%?$/.test(lastValue);
+            const maxDiscount = hasDiscount ? Number(tags.pop().replace("%", "").replace(",", ".")) : null;
+            const matchesWear = tags.length === 0 || tags.some((tag) =>
+                Array.from(mvElements).some((element) => element.innerText.includes(tag))
+            );
+            return matchesWear && (maxDiscount === null || discount <= maxDiscount);
+        });
+
         if (image_url_filter_type === "blacklist") {
-            let isInBlacklist = false;
-            for (const [url, mvs] of Object.entries(image_urls)) {
-                if (imageElementSrc && imageElementSrc.includes(url)) {
-                    if (mvs.length !== 0) {
-                        mvs.forEach((mv) => {
-                            if (mvElements) {
-                                mvElements.forEach((mvElement) => {
-                                    if (mvElement.innerText.includes(mv)) {
-                                        isInBlacklist = true;
-                                    }
-                                });
-                            }
-                        });
-                    } else {
-                        isInBlacklist = true;
-                    }
-                }
-            }
-            shouldHighlight = !isInBlacklist;
+            shouldHighlight = !matchesImageRule;
         } else if (image_url_filter_type === "whitelist") {
-            let isWhitelisted = false;
-            for (const [url, mvs] of Object.entries(image_urls)) {
-                if (imageElementSrc && imageElementSrc.includes(url)) {
-                    if (mvs.length !== 0) {
-                        mvs.forEach((mv) => {
-                            if (mvElements) {
-                                mvElements.forEach((mvElement) => {
-                                    if (mvElement.innerText.includes(mv)) {
-                                        isWhitelisted = true;
-                                    }
-                                });
-                            }
-                        });
-                    } else {
-                        isWhitelisted = true;
-                    }
-                }
-            }
-            shouldHighlight = isWhitelisted;
+            shouldHighlight = matchesImageRule;
         }
     }
 
